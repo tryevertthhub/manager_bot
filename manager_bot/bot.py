@@ -1,69 +1,80 @@
 import discord
 from discord.ext import commands
+import aiohttp
 import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env
 load_dotenv()
 
-# Fetch tokens and keys from environment variables
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-# Predefined questions and answers
-PREDEFINED_QA = {
-    "What is Commune AI?": "ACommune AI (COMAI) is a decentralized, permissionless, and composable protocol that aims to connect all developer tools into one network, fostering a more shareable, reusable, and open economy. It follows an inclusive design philosophy, allowing developers to integrate tools seamlessly and leverage the collective knowledge and resources of the community to enhance their projects.",
-    "How does Commune AI work?": "AI works by using algorithms and large data sets to identify patterns and make decisions based on learned information.",
-    "What is Subnet?": "Machine Learning is a subset of AI that involves training algorithms to learn from and make predictions on data.",
-}
+OPEN_ROUTER_API_KEY = os.getenv("OPEN_ROUTER_API_KEY")
+AI_BASE_URL = "https://openrouter.ai/api/v1"
 
 class AIChatBot(commands.Bot):
     """
-    A Discord bot that allows users to select from predefined questions and receive answers.
+    A Discord bot that uses OpenRouter AI to generate answers to user questions.
     """
 
     def __init__(self):
         """
-        Initializes the bot with required intents, command prefix, and event listeners.
-        Sets up bot commands and defines intents for message content.
+        Initializes the bot with required intents and commands.
         """
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="/", intents=intents)
-
-        # Initialize commands and interactions
         self.setup_commands()
 
     async def on_ready(self):
-        """Event that runs when the bot is ready and connected to Discord."""
+        """Runs when the bot is ready."""
         print(f"Logged in as {self.user}!")
         await self.tree.sync()
 
     def setup_commands(self):
-        """Registers all bot commands in the command tree."""
-        
-        # Register the /ask command
+        """Registers the /ask command."""
         @self.tree.command(name="ask")
-        async def ask(interaction: discord.Interaction):
-            """Displays a list of questions for the user to select from."""
-            await self.ask_command(interaction)
+        async def ask(interaction: discord.Interaction, question: str):
+            """
+            Handles the /ask command by sending the question to OpenRouter AI.
+            
+            Args:
+                interaction (discord.Interaction): The interaction object.
+                question (str): The question asked by the user.
+            """
+            await interaction.response.defer(ephemeral=False)
+            ai_response = await self.fetch_ai_response(question)
+            await interaction.followup.send(ai_response)
 
-    async def ask_command(self, interaction: discord.Interaction):
+    async def fetch_ai_response(self, question: str) -> str:
         """
-        Displays a dropdown list of predefined questions for the user to select.
-        """
-        options = [discord.SelectOption(label=question) for question in PREDEFINED_QA.keys()]
-        select = discord.ui.Select(placeholder="Choose a question...", options=options)
-        
-        async def select_callback(interaction):
-            question = select.values[0]
-            answer = PREDEFINED_QA.get(question, "Sorry, I don't have an answer for that question.")
-            await interaction.response.send_message(answer, ephemeral=True)
+        Sends the question to OpenRouter AI and retrieves the response.
 
-        select.callback = select_callback
-        view = discord.ui.View()
-        view.add_item(select)
-        
-        await interaction.response.send_message("Select a question to get an answer:", view=view, ephemeral=True)
+        Args:
+            question (str): The user's question.
+
+        Returns:
+            str: The response from OpenRouter AI, or an error message.
+        """
+        headers = {
+            "Authorization": f"Bearer {OPEN_ROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "model": "openai/gpt-4",
+            "prompt": question,
+            "max_tokens": 1000,
+            "temperature": 1.0,
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{AI_BASE_URL}/completions", headers=headers, json=data) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    return response_data["choices"][0]["text"].strip()
+                else:
+                    error_message = await response.text()
+                    print(f"HTTP error {response.status}: {error_message}")
+                    return "Failed to fetch AI response. Please try again later."
 
 # Instantiate and run the bot
 def run_discord_bot():
